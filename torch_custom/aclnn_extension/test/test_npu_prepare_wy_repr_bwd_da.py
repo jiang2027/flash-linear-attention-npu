@@ -4,21 +4,18 @@ from typing import Optional
 import math
 # import ct
 import random
-# import custom_ops
 import aclnn_extension
 import os
 
-# 当前文件所在目录
+torch.npu.utils.set_device(3)
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
-
-# output 文件夹路径
 output_dir = os.path.join(current_dir, "output")
-
-# 如果不存在就创建
 os.makedirs(output_dir, exist_ok=True)
 
 torch.npu.config.allow_internal_format = False
 torch.npu.set_compile_mode(jit_compile=False)
+
 
 def prepare_cu_seqlens(T: int, L: int = 32, seed: int = 42) -> list[int]:
     """
@@ -65,6 +62,7 @@ def prepare_cu_seqlens(T: int, L: int = 32, seed: int = 42) -> list[int]:
 
     return cu_seqlens
 
+
 def prepare_chunk_indices(
     cu_seqlens: list[int],
     chunk_size: int
@@ -86,22 +84,22 @@ def prepare_chunk_indices(
     # 遍历每个序列段
     for i in range(len(cu_seqlens) - 1):
         start = cu_seqlens[i]
-        end = cu_seqlens[i+1]
+        end = cu_seqlens[i + 1]
         length = end - start
-        
+
         if length <= 0:
             continue
-            
+
         # 计算该序列需要多少个 chunk
         # 等价于 cdiv(length, chunk_size)
         num_chunks = (length + chunk_size - 1) // chunk_size
-        
+
         for chunk_id in range(num_chunks):
             # 原逻辑: indices.eq(0).cumsum(0) - 1 对应的是序列索引 i
             # 原逻辑: indices 对应的是 chunk_id
             indices.append((i))
             indices.append((chunk_id))
-            
+
     return indices
 
 def create_incremental_tensor(shape, dtype=torch.float16, start=1, step=1):
@@ -152,6 +150,7 @@ def get_bos_eos(idx, T, chunk_size, cu_seqlens, chunk_indices):
             eos = T
     # print(bos, eos)
     return bos, eos
+
 
 def compute_dA_cpu(
     A: torch.Tensor,      # [B, H, T, BT] - 每个chunk的A值
@@ -279,50 +278,55 @@ def compute_dA_cpu(
                 b_dA = torch.where(m_A[:chunk_len, :chunk_len], b_dA_7.to(torch.float32), 0.0)
 
                 # 存储结果
-                dA[i_b, i_h, bos : eos, : chunk_len] = b_dA.to(torch.float16)
+                dA[i_b, i_h, bos : eos, : chunk_len] = b_dA.T.to(A.dtype)
 
     return dA
 
-def test_variable():
-    B, H, T, K, V = 1, 2, 128, 128, 128
-    BT=chunk_size=64
 
-    # B = 1;
-    # T = 2048;
-    # H = 4;
-    # K = 128;
-    # V = 128;
-    # BT=chunk_size=64
+def create_tensor(shape, dtype=torch.float16):
+    # return create_incremental_tensor(shape,dtype)
+    # return torch.ones(shape, dtype=dtype)
+    return torch.rand(shape, dtype=dtype)
 
-    # B = 1;
-    # T = 32768;
-    # H = 32;
-    # K = 128;
-    # V = 128;
-    # BT=chunk_size=64
 
-    k = create_tensor((B, H, T, K), dtype=torch.float16)
+def test_prepare_wy_repr_bwd_da_variable(
+    B: int,
+    H: int,
+    T: int,
+    K: int,
+    V: int,
+    chunk_size: int,
+    cu_seqlens_len: int,
+    ktype,
+    gtype,
+    seed: int = 0,
+):
+    torch.manual_seed(seed)
+    if not hasattr(test_prepare_wy_repr_bwd_da_variable, "call_count"):
+        test_prepare_wy_repr_bwd_da_variable.call_count = 1
+    else:
+        test_prepare_wy_repr_bwd_da_variable.call_count += 1
+
+    BT = chunk_size
+
+    k = create_tensor((B, H, T, K), dtype=ktype)
     print(f"==== k.shape = {k.shape} ")
-    v = create_tensor((B, H, T, V), dtype=torch.float16)
+    v = create_tensor((B, H, T, V), dtype=ktype)
     print(f"==== v.shape = {v.shape} ")
-    beta = create_tensor((B, H, T), dtype=torch.float)
+    beta = create_tensor((B, H, T), dtype=gtype)
     print(f"==== beta.shape = {beta.shape} ")
-    A = create_tensor((B, H, T, BT), dtype=torch.float16)
+    A = create_tensor((B, H, T, BT), dtype=ktype)
     print(f"==== A.shape = {A.shape} ")
-    dw = create_tensor((B, H, T, K), dtype=torch.float16)
+    dw = create_tensor((B, H, T, K), dtype=ktype)
     print(f"==== dw.shape = {dw.shape} ")
-    du = create_tensor((B, H, T, V), dtype=torch.float16)
+    du = create_tensor((B, H, T, V), dtype=ktype)
     print(f"==== du.shape = {du.shape} ")
-    g = create_tensor((B, H, T), dtype=torch.float)
+    # g = create_tensor((B, H, T), dtype=gtype)
+    g = torch.arange(-1, -(B * H * T + 1), -1).reshape((B, H, T)).to(gtype)
     print(f"==== g.shape = {g.shape} ")
+    # print(f"==== g = {g} ")
 
-    # lower_tri_matrix = bool_matrix_lower_tri_to_uint8(chunk_size)
-    # print(f"==== lower_tri_matrix.shape = {lower_tri_matrix.shape}")
-    # print("==== lower_tri_matrix ====")
-    # print(lower_tri_matrix)
-
-    cu_seqlens = prepare_cu_seqlens(T = T, L = 16)
-    # cu_seqlens = k.new_tensor([0, 2, 2048], dtype=torch.long)
+    cu_seqlens = prepare_cu_seqlens(T=T, L=cu_seqlens_len)
     chunk_indices = prepare_chunk_indices(cu_seqlens, chunk_size)
     print(f"==== chunk_indices len = {len(chunk_indices)}, chunk_indices[:20] = {chunk_indices[:20]}")
 
@@ -333,13 +337,14 @@ def test_variable():
     dw_npu = dw.npu()
     du_npu = du.npu()
     g_npu = g.npu()
-    # lower_tri_matrix_npu = lower_tri_matrix.npu()
 
-    dA_npu = torch.ops.npu.npu_prepare_wy_repr_bwd_da(k_npu, v_npu, beta_npu, A_npu, dw_npu, du_npu, g_npu, chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices)
+    dA_npu = torch.ops.npu.npu_prepare_wy_repr_bwd_da(
+        k_npu, v_npu, beta_npu, A_npu, dw_npu, du_npu, g_npu,
+        chunk_size=chunk_size, cu_seqlens=cu_seqlens, chunk_indices=chunk_indices
+    )
     save_path1 = os.path.join(output_dir, "test_dA_var_npu.pt")
     torch.save(dA_npu, save_path1)
     print(f"==== dA_npu.shape = {dA_npu.shape} ")
-    # print(f"==== dA_npu = {dA_npu} ")
     print(f"==== dA_npu.dtype = {dA_npu.dtype} ")
 
     NT = len(chunk_indices) // 2
@@ -348,45 +353,44 @@ def test_variable():
     save_path2 = os.path.join(output_dir, "test_dA_var_cpu.pt")
     torch.save(dA_cpu, save_path2)
 
-    # ct.isclose(dA_cpu, dA_npu, diff_thd=0.1)
+    print(f"test_prepare_wy_repr_bwd_da_variable 被调用了第 {test_prepare_wy_repr_bwd_da_variable.call_count} 次")
 
-def test_fix():
-    # B, H, T, K, V = 1, 2, 128, 128, 128
-    # BT=chunk_size=64
 
-    B = 1;
-    T = 2048;
-    H = 4;
-    K = 128;
-    V = 128;
-    BT=chunk_size=64
+def test_prepare_wy_repr_bwd_da_fix(
+    B: int,
+    H: int,
+    T: int,
+    K: int,
+    V: int,
+    chunk_size: int,
+    ktype,
+    gtype,
+    seed: int = 0,
+):
+    torch.manual_seed(seed)
+    if not hasattr(test_prepare_wy_repr_bwd_da_fix, "call_count"):
+        test_prepare_wy_repr_bwd_da_fix.call_count = 1
+    else:
+        test_prepare_wy_repr_bwd_da_fix.call_count += 1
 
-    # B = 1;
-    # T = 32768;
-    # H = 32;
-    # K = 128;
-    # V = 128;
-    # BT=chunk_size=64
+    BT = chunk_size
 
-    k = create_tensor((B, H, T, K), dtype=torch.float16)
+    k = create_tensor((B, H, T, K), dtype=ktype)
     print(f"==== k.shape = {k.shape} ")
-    v = create_tensor((B, H, T, V), dtype=torch.float16)
+    v = create_tensor((B, H, T, V), dtype=ktype)
     print(f"==== v.shape = {v.shape} ")
-    beta = create_tensor((B, H, T), dtype=torch.float)
+    beta = create_tensor((B, H, T), dtype=gtype)
     print(f"==== beta.shape = {beta.shape} ")
-    A = create_tensor((B, H, T, BT), dtype=torch.float16)
+    A = create_tensor((B, H, T, BT), dtype=ktype)
     print(f"==== A.shape = {A.shape} ")
-    dw = create_tensor((B, H, T, K), dtype=torch.float16)
+    dw = create_tensor((B, H, T, K), dtype=ktype)
     print(f"==== dw.shape = {dw.shape} ")
-    du = create_tensor((B, H, T, V), dtype=torch.float16)
+    du = create_tensor((B, H, T, V), dtype=ktype)
     print(f"==== du.shape = {du.shape} ")
-    g = create_tensor((B, H, T), dtype=torch.float)
+    # g = create_tensor((B, H, T), dtype=gtype)
+    g = torch.arange(-1, -(B * H * T + 1), -1).reshape((B, H, T)).to(gtype)
     print(f"==== g.shape = {g.shape} ")
-
-    # lower_tri_matrix = bool_matrix_lower_tri_to_uint8(chunk_size)
-    # print(f"==== lower_tri_matrix.shape = {lower_tri_matrix.shape}")
-    # print("==== lower_tri_matrix ====")
-    # print(lower_tri_matrix)
+    # print(f"==== g = {g} ")
 
     k_npu = k.npu()
     v_npu = v.npu()
@@ -395,14 +399,15 @@ def test_fix():
     dw_npu = dw.npu()
     du_npu = du.npu()
     g_npu = g.npu()
-    # lower_tri_matrix_npu = lower_tri_matrix.npu()
 
-    dA_npu = torch.ops.npu.npu_prepare_wy_repr_bwd_da(k_npu, v_npu, beta_npu, A_npu, dw_npu, du_npu, g_npu, chunk_size=chunk_size, cu_seqlens=None, chunk_indices=None)
+    dA_npu = torch.ops.npu.npu_prepare_wy_repr_bwd_da(
+        k_npu, v_npu, beta_npu, A_npu, dw_npu, du_npu, g_npu,
+        chunk_size=chunk_size, cu_seqlens=None, chunk_indices=None
+    )
     save_path3 = os.path.join(output_dir, "test_dA_npu.pt")
     torch.save(dA_npu, save_path3)
-    # print(f"==== dA_npu.shape = {dA_npu.shape} ")
-    # print(f"==== dA_npu = {dA_npu} ")
-    # print(f"==== dA_npu.dtype = {dA_npu.dtype} ")
+    print(f"==== dA_npu.shape = {dA_npu.shape} ")
+    print(f"==== dA_npu.dtype = {dA_npu.dtype} ")
 
     chunk_indices = None
     cu_seqlens = None
@@ -412,19 +417,18 @@ def test_fix():
     save_path4 = os.path.join(output_dir, "test_dA_cpu.pt")
     torch.save(dA_cpu, save_path4)
 
-    # ct.isclose(dA_cpu, dA_npu, diff_thd=0.1)
+    print(f"test_prepare_wy_repr_bwd_da_fix 被调用了第 {test_prepare_wy_repr_bwd_da_fix.call_count} 次")
 
-def create_tensor(shape, dtype=torch.float16):
-
-    # return create_incremental_tensor(shape,dtype)
-    # return torch.ones(shape, dtype=dtype)
-    return torch.rand(shape, dtype=dtype)
 
 if __name__ == "__main__":
     torch.manual_seed(0)
-    print("==== test_variable ====")
-    test_variable()
-    print("variable test done!")
+
+    # Fix length tests
     print("==== test_fix ====")
-    test_fix()
+    test_prepare_wy_repr_bwd_da_fix(B=1, H=2, T=128, K=128, V=128, chunk_size=64, ktype=torch.float16, gtype=torch.float16)
     print("fix test done!")
+
+    # Variable length tests
+    print("==== test_variable ====")
+    test_prepare_wy_repr_bwd_da_variable(B=1, H=8, T=256, K=128, V=128, chunk_size=128, cu_seqlens_len=3, ktype=torch.bfloat16, gtype=torch.bfloat16)
+    print("variable test done!")

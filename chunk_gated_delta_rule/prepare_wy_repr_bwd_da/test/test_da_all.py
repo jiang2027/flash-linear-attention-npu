@@ -6,6 +6,17 @@ import ct
 import pandas as pd
 import re
 import random
+import os
+import aclnn_extension
+
+torch.npu.utils.set_device(3)
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.join(current_dir, "output")
+os.makedirs(output_dir, exist_ok=True)
+
+torch.npu.config.allow_internal_format = False
+torch.npu.set_compile_mode(jit_compile=False)
 
 def prepare_cu_seqlens(T: int, L: int = 32, seed: int = 42) -> list[int]:
     """
@@ -281,14 +292,14 @@ def run_test_case(case_idx, B, H, T, K, V, chunk_size, k_dtype, v_dtype, beta_dt
         cu_seqlens_npu = cu_seqlens
         chunk_indices_npu = chunk_indices
 
-    dA_npu = torch_npu.npu_prepare_wy_repr_bwd_da(
+    dA_npu = torch.ops.npu.npu_prepare_wy_repr_bwd_da(
         k_npu, v_npu, beta_npu, A_npu, dw_npu, du_npu, g_npu,
+        chunk_size=chunk_size,
         cu_seqlens=cu_seqlens_npu,
-        chunk_indices=chunk_indices_npu,
-        chunk_size=chunk_size
+        chunk_indices=chunk_indices_npu
     )
 
-    torch.save(dA_npu, f"/data/yzq/ops-transformer_GDN/chunk_gated_delta_rule/prepare_wy_repr_bwd_da/test/output/test_dA_{case_idx}_npu.pt")
+    torch.save(dA_npu, os.path.join(output_dir, f"test_dA_{case_idx}_npu.pt"))
 
     print(f"==== dA_npu.shape = {dA_npu.shape} ")
 
@@ -300,7 +311,7 @@ def run_test_case(case_idx, B, H, T, K, V, chunk_size, k_dtype, v_dtype, beta_dt
     print("==== NT = ", NT)
     dA_cpu = compute_dA_cpu(A, dw, g, beta, k, v, du, chunk_indices, cu_seqlens, B, H, T, K, BT, NT)
 
-    torch.save(dA_cpu, f"/data/yzq/ops-transformer_GDN/chunk_gated_delta_rule/prepare_wy_repr_bwd_da/test/output/test_dA_{case_idx}_cpu.pt")
+    torch.save(dA_cpu, os.path.join(output_dir, f"test_dA_{case_idx}_cpu.pt"))
 
     try:
         ct.isclose(dA_cpu, dA_npu, diff_thd=0.1)
@@ -322,7 +333,7 @@ def read_cases_from_xlsx(file_path):
 def main():
     torch.manual_seed(0)
 
-    cases_file = '/data/yzq/ops-transformer_GDN/chunk_gated_delta_rule/prepare_wy_repr_bwd_da/test/cases.xlsx'
+    cases_file = os.path.join(current_dir, "cases.xlsx")
     cases = read_cases_from_xlsx(cases_file)
 
     print(f"Total test cases: {len(cases)}")
