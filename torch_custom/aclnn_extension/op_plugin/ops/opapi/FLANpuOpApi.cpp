@@ -231,4 +231,26 @@ at::Tensor npu_chunk_fwd_o(
     return std::make_tuple(h_out, v_new_out, final_state_out);
 }
 
+::std::tuple<at::Tensor, at::Tensor> npu_recompute_w_u_fwd(
+    const at::Tensor &k,
+    const at::Tensor &v,
+    const at::Tensor &beta,
+    const at::Tensor &A,
+    int64_t chunk_size,
+    const c10::optional<at::Tensor> &g,
+    const c10::optional<at::Tensor> &gK,
+    c10::OptionalIntArrayRef cu_seqlens,
+    c10::OptionalIntArrayRef chunk_indices
+)
+{
+    at::Tensor w = at::empty_like(k);
+    at::Tensor u = at::empty_like(v);
+    const at::Tensor &gK_ = c10::value_or_else(gK, [] { return at::Tensor(); });
+    const at::Tensor &g_ = c10::value_or_else(g, [] { return at::Tensor(); });
+
+    EXEC_NPU_CMD_EXT(aclnnRecomputeWUFwd,
+        k, v, beta, A, g_, gK_,cu_seqlens, chunk_indices, chunk_size, w, u);
+    return std::tie(w,u);
+}
+
 }  // namespace op_api

@@ -5,7 +5,8 @@ import pickle
 import math
 import ct
 import random
-torch.npu.utils.set_device(6)
+import aclnn_extension
+torch.npu.utils.set_device(2)
 
 def get_bos_eos(idx, T, chunk_size, cu_seqlens, chunk_indices):
     if cu_seqlens != None:
@@ -273,36 +274,34 @@ def test_recompute_wu_fwd(
 
     # 将张量移到 NPU 并调用反向算子
     if chunk_indices != None:
-        w, u = torch_npu.npu_recompute_w_u_fwd(
+        w, u = torch.ops.npu.npu_recompute_w_u_fwd(
             k.npu(),
             v.npu(),
             beta.npu(),
             A.npu(),
-            g.npu(),
-            None,
+            chunk_size,
+            g = g.npu(),
+            gk = None,
             cu_seqlens=cu_seqlens,
-            chunk_indices=chunk_indices,
-            chunk_size=chunk_size
+            chunk_indices=chunk_indices
         )
     else:
-        w, u = torch_npu.npu_recompute_w_u_fwd(
+        w, u = torch.ops.npu.npu_recompute_w_u_fwd(
             k.npu(),
             v.npu(),
             beta.npu(),
             A.npu(),
-            g.npu(),
-            None,
+            chunk_size,
+            g = g.npu(),
+            gk = None,
             cu_seqlens=None,
-            chunk_indices=None,
-            chunk_size=chunk_size
+            chunk_indices=None
         )
-    # cpu_w = compute_w_golden(k, v, beta, A, g, cu_seqlens, chunk_indices, B, H, T, K, chunk_size, NT)
+    cpu_w = compute_w_golden(k, v, beta, A, g, cu_seqlens, chunk_indices, B, H, T, K, chunk_size, NT)
     # ct.isclose(w.cpu(), cpu_w.cpu(), diff_thd=0.1)
-    # torch.save(cpu_dv, "cpu_dv.pt")
     
-    # cpu_u = compute_u_golden(k, v, beta, A, g, cu_seqlens, chunk_indices, B, H, T, K, chunk_size, NT)
+    cpu_u = compute_u_golden(k, v, beta, A, g, cu_seqlens, chunk_indices, B, H, T, K, chunk_size, NT)
     # ct.isclose(u.cpu(), cpu_u.cpu(), diff_thd=0.1)
-    # torch.save(cpu_dk, "cpu_dk.pt")
 
     
     print(f"test_recompute_wu_fwd 被调用了第 {test_recompute_wu_fwd.call_count} 次")
