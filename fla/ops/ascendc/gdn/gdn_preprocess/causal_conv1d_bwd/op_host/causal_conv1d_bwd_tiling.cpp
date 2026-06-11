@@ -41,7 +41,6 @@ namespace {
     constexpr uint32_t RESERVED_UB = 16 * 1024;
     constexpr uint32_t FP32_DTYPE_SIZE = 4U;
     constexpr uint32_t BLOCK_ALIGN_NUM = 8U;
-    constexpr uint32_t TRANSPOSE_B32_TMP_ELE_LEN = 128U;
     constexpr uint32_t ACTIVATION_NONE = 0;
     constexpr uint32_t ACTIVATION_SILU = 1;
     constexpr uint32_t ACTIVATION_SWISH = 2;
@@ -182,10 +181,26 @@ static ge::graphStatus CausalConv1dBwdTilingFunc(gert::TilingContext *context)
     {
         auto initStateShape = context->GetInputShape(INITIAL_STATE_INPUT_INDEX);
         if (initStateShape != nullptr && initStateShape->GetStorageShape().GetDimNum() > 0) {
+            auto shape = initStateShape->GetStorageShape();
+            OP_CHECK_IF(
+                shape.GetDimNum() != 3 ||
+                    static_cast<uint32_t>(shape.GetDim(0)) != B ||
+                    static_cast<uint32_t>(shape.GetDim(1)) != W ||
+                    static_cast<uint32_t>(shape.GetDim(2)) != D,
+                OP_LOGE(context, "initial_state must be [B, W, D]=[%u, %u, %u]", B, W, D),
+                return ge::GRAPH_FAILED);
             useInitialState = true;
         }
         auto dhtShape = context->GetInputShape(DHT_INPUT_INDEX);
         if (dhtShape != nullptr && dhtShape->GetStorageShape().GetDimNum() > 0) {
+            auto shape = dhtShape->GetStorageShape();
+            OP_CHECK_IF(
+                shape.GetDimNum() != 3 ||
+                    static_cast<uint32_t>(shape.GetDim(0)) != B ||
+                    static_cast<uint32_t>(shape.GetDim(1)) != W ||
+                    static_cast<uint32_t>(shape.GetDim(2)) != D,
+                OP_LOGE(context, "dht must be [B, W, D]=[%u, %u, %u]", B, W, D),
+                return ge::GRAPH_FAILED);
             useFinalState = true;
         }
     }
@@ -250,8 +265,6 @@ static ge::graphStatus CausalConv1dBwdTilingFunc(gert::TilingContext *context)
         need += 2 * btBdAl * FP32_DTYPE_SIZE;
     if (useInitialState || useFinalState) {
         need += bdAl * FP32_DTYPE_SIZE;
-        uint32_t transposeTmpAl = CeilAlign((2 * W + 1) * TRANSPOSE_B32_TMP_ELE_LEN, BLOCK_ALIGN_NUM);
-        need += transposeTmpAl * FP32_DTYPE_SIZE;
     }
 
     OP_CHECK_IF(need > ubSize,

@@ -59,7 +59,7 @@ class CausalConv1dBwdGenerator(CaseGenerator):
                 head_dim = d
             d = n * head_dim
             x_shape = [b, n, t, head_dim]
-            state_shape = [b, d, w]
+            state_shape = [b, w, d]
             query_start_loc = [0, t]
         elif input_layout == "NTD":
             n = 2 if d >= 32 else 1
@@ -70,16 +70,16 @@ class CausalConv1dBwdGenerator(CaseGenerator):
             d = n * head_dim
             state_b = 1
             x_shape = [n, t, head_dim]
-            state_shape = [state_b, d, w]
+            state_shape = [state_b, w, d]
             query_start_loc = [0, t]
         elif input_layout == "TND":
             state_b = 1
             x_shape = [t, d]
-            state_shape = [state_b, d, w]
+            state_shape = [state_b, w, d]
             query_start_loc = [0, t]
         else:
             x_shape = [b, t, d]
-            state_shape = [b, d, w]
+            state_shape = [b, w, d]
             query_start_loc = [0, t]
         case_config.inputs[X_INDEX].shape = x_shape
         case_config.inputs[Y_INDEX].shape = x_shape

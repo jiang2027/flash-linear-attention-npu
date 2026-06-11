@@ -95,15 +95,15 @@ aclnnStatus aclnnCausalConv1dBwd(
   | yOptional | 输入 | 前向预激活输出 tensor。数据类型、format、shape 与 `x` 相同。`activation=0` 时可为 `nullptr`；`activation=1` 或 `activation=2` 时必须提供。 |
   | weight | 输入 | 卷积核权重 tensor，shape 为 `[W, D]`，数据类型与 `x` 相同，format 支持 `ND`。`W` 为卷积核宽度，`D` 为逻辑特征维度。 |
   | dy | 输入 | 前向输出梯度 tensor。数据类型、format、shape 与 `x` 相同。 |
-  | initialStateOptional | 输入 | 初始卷积状态 tensor，shape 为 `[B, D, W]`，数据类型与 `x` 相同，format 支持 `ND`。可为 `nullptr`。 |
-  | dhtOptional | 输入 | 最终卷积状态梯度 tensor，shape 为 `[B, D, W]`，数据类型与 `x` 相同，format 支持 `ND`。可为 `nullptr`。 |
+  | initialStateOptional | 输入 | 初始卷积状态 tensor，shape 为 `[B, W, D]`，数据类型与 `x` 相同，format 支持 `ND`。可为 `nullptr`。 |
+  | dhtOptional | 输入 | 最终卷积状态梯度 tensor，shape 为 `[B, W, D]`，数据类型与 `x` 相同，format 支持 `ND`。可为 `nullptr`。 |
   | queryStartLocOptional | 输入 | 变长序列起止位置数组，类型为 `aclIntArray`，元素类型为 `int64_t`，长度为 `B+1`。`TND`/`NTD` layout 下必须提供；固定长度 layout 下可为 `nullptr`。 |
   | activation | 输入 | 激活反向模式，`int64_t` 类型。`0` 表示不使用激活函数；`1` 表示 SiLU；`2` 表示 Swish，当前与 SiLU 等价。 |
   | inputLayoutOptional | 输入 | 输入 layout 字符串，可为 `nullptr`，默认值为 `BSND`。支持 `BSND`、`BSH`、`TND`、`BNSD`、`NTD`，其中 `BSH` 等价于 `BSND`。 |
   | dxOut | 输出 | 输入梯度 tensor。输出采用逻辑 layout：固定长度为 `[B, T, D]`，变长为 `[totalTokens, D]`。数据类型与 `x` 相同，format 支持 `ND`。 |
   | dwOutOptional | 输出 | 权重梯度 tensor，shape 为 `[W, D]`，数据类型为 `FLOAT`，format 支持 `ND`。 |
   | dbOutOptional | 输出 | 偏置梯度 tensor，shape 为 `[D]`，数据类型为 `FLOAT`，format 支持 `ND`。 |
-  | dh0OutOptional | 输出 | 初始状态梯度 tensor，shape 为 `[B, D, W]`，数据类型与 `x` 相同，format 支持 `ND`。当不需要 `dh0` 或未提供 `initialStateOptional` 时可为 `nullptr`。 |
+  | dh0OutOptional | 输出 | 初始状态梯度 tensor，shape 为 `[B, W, D]`，数据类型与 `x` 相同，format 支持 `ND`。当不需要 `dh0` 或未提供 `initialStateOptional` 时可为 `nullptr`。 |
   | workspaceSize | 输出 | 返回用户需要在 Device 侧申请的 workspace 大小。 |
   | executor | 输出 | 返回 op 执行器，包含算子计算流程。 |
 
@@ -159,7 +159,7 @@ aclnnStatus aclnnCausalConv1dBwd(
 - shape：
   - `weight` 必须为二维 tensor，shape 为 `[W, D]`。
   - `yOptional` 和 `dy` 必须与 `x` 采用相同输入 layout 和相同 shape。
-  - `initialStateOptional`、`dhtOptional`、`dh0OutOptional` 的逻辑 shape 为 `[B, D, W]`。
+  - `initialStateOptional`、`dhtOptional`、`dh0OutOptional` 的逻辑 shape 为 `[B, W, D]`，与正向算子的状态 layout 一致。
   - `BSND`/`TND` layout 下逻辑特征维 `D` 必须为 16 的倍数；`BNSD`/`NTD` layout 下最后一维 `Dh` 必须为 16 的倍数，逻辑特征维为 `D=N*Dh`。
   - 不支持空序列，固定长度场景下 `T > 0`，变长场景下 `totalTokens > 0`。
 - layout：
@@ -250,11 +250,11 @@ int main()
 
     std::vector<int64_t> xShape = {B, T, D};
     std::vector<int64_t> weightShape = {W, D};
-    std::vector<int64_t> stateShape = {B, D, W};
+    std::vector<int64_t> stateShape = {B, W, D};
     std::vector<int64_t> dxShape = {B, T, D};
     std::vector<int64_t> dwShape = {W, D};
     std::vector<int64_t> dbShape = {D};
-    std::vector<int64_t> dh0Shape = {B, D, W};
+    std::vector<int64_t> dh0Shape = {B, W, D};
 
     std::vector<float> xHost(GetShapeSize(xShape), 1.0f);
     std::vector<float> yHost(GetShapeSize(xShape), 0.0f);

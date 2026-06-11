@@ -45,7 +45,6 @@ using namespace AscendC;
 
 constexpr uint32_t FP32_DTYPE_SIZE = 4;
 constexpr uint32_t BLOCK_ALIGN_NUM = 8;
-constexpr uint32_t TRANSPOSE_B32_TMP_ELE_LEN = 128;
 constexpr uint32_t ACTIVATION_NONE = 0;
 constexpr uint32_t ACTIVATION_SILU = 1;
 constexpr uint32_t ACTIVATION_SWISH = 2;
@@ -102,7 +101,6 @@ private:
     __aicore__ inline void CopyOutPartialDwDb(uint32_t coreIdx, uint32_t i_d);
     __aicore__ inline void ReducePartialDwDb(uint32_t i_d);
     __aicore__ inline void ReduceRowsInplace(LocalTensor<float> tensor, uint32_t rows, uint32_t cols);
-    __aicore__ inline uint32_t GetStateTransposeTmpBytes() const;
     __aicore__ inline bool ResolveChunk(uint32_t chunkIdx, uint32_t &i_b, uint32_t &i_t,
                                         uint64_t &bos, uint32_t &seqLen);
 
@@ -121,7 +119,6 @@ private:
     TBuf<TPosition::VECCALC> dbRowsBuf_;
     TBuf<TPosition::VECCALC> sigmoidBuf_;
     TBuf<TPosition::VECCALC> dh0Buf_;
-    TBuf<TPosition::VECCALC> transposeBuf_;
 
     uint32_t B_ = 0, T_ = 0, D_ = 0, W_ = 0;
     uint32_t activation_ = ACTIVATION_NONE;
@@ -240,14 +237,6 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::InitBuffer(TPipe *in
     }
     if (useInitialState_ || useFinalState_)
         pipe_->InitBuffer(dh0Buf_, BD_ * FP32_DTYPE_SIZE);
-    if (useInitialState_ || useFinalState_)
-        pipe_->InitBuffer(transposeBuf_, GetStateTransposeTmpBytes());
-}
-
-template <typename inputT, typename calT>
-__aicore__ inline uint32_t CausalConv1dBwdKernel<inputT, calT>::GetStateTransposeTmpBytes() const
-{
-    return (2 * W_ + 1) * TRANSPOSE_B32_TMP_ELE_LEN * FP32_DTYPE_SIZE;
 }
 
 template <typename inputT, typename calT>
@@ -476,16 +465,16 @@ template <typename inputT, typename calT>
 __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInitialStateBlock(
     uint32_t i_b, uint32_t i_d)
 {
-    LocalTensor<float> stateBlock = wdyBuf_.Get<float>();
+    LocalTensor<float> stateBlock = tempBuf_.Get<float>();
     DataCopyExtParams copyParams{
-        1,
-        static_cast<uint32_t>(BD_ * W_ * sizeof(inputT)),
-        0,
+        static_cast<uint16_t>(W_),
+        static_cast<uint32_t>(BD_ * sizeof(inputT)),
+        static_cast<uint32_t>((D_ - BD_) * sizeof(inputT)),
         0,
         0};
     DataCopyPadExtParams<inputT> padParams{false, 0, 0, static_cast<inputT>(0)};
-    uint64_t off = static_cast<uint64_t>(i_b) * D_ * W_ +
-                   static_cast<uint64_t>(i_d) * BD_ * W_;
+    uint64_t off = static_cast<uint64_t>(i_b) * W_ * D_ +
+                   static_cast<uint64_t>(i_d) * BD_;
 
     event_t vMte2Ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
     SetFlag<HardEvent::V_MTE2>(vMte2Ev);
@@ -504,29 +493,22 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInitialStateBl
         Cast(stateBlock, stateIn, RoundMode::CAST_NONE, BD_ * W_);
         PipeBarrier<PIPE_V>();
     }
-
-    LocalTensor<float> stateTrans = tempBuf_.Get<float>();
-    LocalTensor<uint8_t> transposeTmp = transposeBuf_.Get<uint8_t>();
-    TransposeParamsExt transposeParams(1, static_cast<uint16_t>(W_), static_cast<uint16_t>(BD_), 1,
-                                       TransposeType::TRANSPOSE_NHWC2NCHW);
-    Transpose(stateTrans, stateBlock, transposeTmp, transposeParams);
-    PipeBarrier<PIPE_V>();
 }
 
 template <typename inputT, typename calT>
 __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInDhtBlock(
     uint32_t i_b, uint32_t i_d)
 {
-    LocalTensor<float> stateBlock = wdyBuf_.Get<float>();
+    LocalTensor<float> stateBlock = tempBuf_.Get<float>();
     DataCopyExtParams copyParams{
-        1,
-        static_cast<uint32_t>(BD_ * W_ * sizeof(inputT)),
-        0,
+        static_cast<uint16_t>(W_),
+        static_cast<uint32_t>(BD_ * sizeof(inputT)),
+        static_cast<uint32_t>((D_ - BD_) * sizeof(inputT)),
         0,
         0};
     DataCopyPadExtParams<inputT> padParams{false, 0, 0, static_cast<inputT>(0)};
-    uint64_t off = static_cast<uint64_t>(i_b) * D_ * W_ +
-                   static_cast<uint64_t>(i_d) * BD_ * W_;
+    uint64_t off = static_cast<uint64_t>(i_b) * W_ * D_ +
+                   static_cast<uint64_t>(i_d) * BD_;
 
     event_t vMte2Ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
     SetFlag<HardEvent::V_MTE2>(vMte2Ev);
@@ -545,13 +527,6 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInDhtBlock(
         Cast(stateBlock, stateIn, RoundMode::CAST_NONE, BD_ * W_);
         PipeBarrier<PIPE_V>();
     }
-
-    LocalTensor<float> stateTrans = tempBuf_.Get<float>();
-    LocalTensor<uint8_t> transposeTmp = transposeBuf_.Get<uint8_t>();
-    TransposeParamsExt transposeParams(1, static_cast<uint16_t>(W_), static_cast<uint16_t>(BD_), 1,
-                                       TransposeType::TRANSPOSE_NHWC2NCHW);
-    Transpose(stateTrans, stateBlock, transposeTmp, transposeParams);
-    PipeBarrier<PIPE_V>();
 }
 
 template <typename inputT, typename calT>
@@ -845,26 +820,30 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ComputeDh0(
         }
     }
 
-    LocalTensor<float> dh0Dst = tempBuf_.Get<float>();
-    LocalTensor<uint8_t> transposeTmp = transposeBuf_.Get<uint8_t>();
-    TransposeParamsExt transposeParams(1, static_cast<uint16_t>(W_), static_cast<uint16_t>(BD_), 1,
-                                       TransposeType::TRANSPOSE_NCHW2NHWC);
-    Transpose(dh0Dst, dh0Src, transposeTmp, transposeParams);
-    PipeBarrier<PIPE_V>();
-
-    uint64_t dh0Base = static_cast<uint64_t>(i_b) * D_ * W_ +
-                       static_cast<uint64_t>(i_d) * BD_ * W_;
+    uint64_t dh0Base = static_cast<uint64_t>(i_b) * W_ * D_ +
+                       static_cast<uint64_t>(i_d) * BD_;
+    uint32_t stateRowStrideBytes = static_cast<uint32_t>((D_ - BD_) * sizeof(inputT));
     if constexpr (IsSameType<inputT, float>::value) {
-        DataCopyExtParams outParams{1, static_cast<uint32_t>(BD_ * W_ * FP32_DTYPE_SIZE), 0, 0, 0};
+        DataCopyExtParams outParams{
+            static_cast<uint16_t>(W_),
+            static_cast<uint32_t>(BD_ * FP32_DTYPE_SIZE),
+            0,
+            stateRowStrideBytes,
+            0};
         event_t vToMte3 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
         SetFlag<HardEvent::V_MTE3>(vToMte3);
         WaitFlag<HardEvent::V_MTE3>(vToMte3);
-        DataCopyPad(dh0Gm_[dh0Base], dh0Dst, outParams);
+        DataCopyPad(dh0Gm_[dh0Base], dh0Src, outParams);
     } else {
         LocalTensor<inputT> dh0Out = castBuf_.Get<inputT>();
-        Cast(dh0Out, dh0Dst, RoundMode::CAST_RINT, BD_ * W_);
+        Cast(dh0Out, dh0Src, RoundMode::CAST_RINT, BD_ * W_);
         PipeBarrier<PIPE_V>();
-        DataCopyExtParams outParams{1, static_cast<uint32_t>(BD_ * W_ * sizeof(inputT)), 0, 0, 0};
+        DataCopyExtParams outParams{
+            static_cast<uint16_t>(W_),
+            static_cast<uint32_t>(BD_ * sizeof(inputT)),
+            0,
+            stateRowStrideBytes,
+            0};
         event_t vToMte3 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
         SetFlag<HardEvent::V_MTE3>(vToMte3);
         WaitFlag<HardEvent::V_MTE3>(vToMte3);

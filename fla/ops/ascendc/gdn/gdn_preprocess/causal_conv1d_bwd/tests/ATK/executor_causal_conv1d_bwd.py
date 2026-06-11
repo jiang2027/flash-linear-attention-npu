@@ -188,7 +188,7 @@ def causal_conv1d_preactivation(x, weight, initial_state=None):
             max_head = min(t, w - 1 - k)
             if max_head > 0:
                 slot = torch.arange(max_head, device=x.device, dtype=torch.long) + k + 1
-                state = state_f[:, :, slot].permute(0, 2, 1).contiguous()
+                state = state_f[:, slot, :]
                 y[:, :max_head, :] += state * weight_f[k].view(1, 1, d)
 
     return y
@@ -248,7 +248,7 @@ def compute_dw_db_kernel_order(x, dy_eff, initial_state, w):
             if rows == 0:
                 continue
             w_idx = w - 1 - i_w
-            state_rows = state_f[:, :, w - i_w : w - i_w + rows].permute(0, 2, 1).contiguous()
+            state_rows = state_f[:, w - i_w : w - i_w + rows, :]
             dw[w_idx, :] += _sum_batch_time_product(dy_eff[:, :rows, :], state_rows)
 
     return dw.contiguous(), db.contiguous()
@@ -277,17 +277,17 @@ def _causal_conv1d_bwd_cpu_fixed(x, y, weight, dy, initial_state, dht, activatio
         start = max(0, t - (w - 1))
         count = t - start
         if count > 0:
-            dx[:, start:t, :] += dht_f[:, :, 1 : 1 + count].permute(0, 2, 1).to(torch.float32)
+            dx[:, start:t, :] += dht_f[:, 1 : 1 + count, :].to(torch.float32)
 
     dw, db = compute_dw_db_kernel_order(x_f, dy_eff, state_f, w)
 
-    dh0 = torch.zeros((b, d, w), dtype=torch.float32, device=x.device)
+    dh0 = torch.zeros((b, w, d), dtype=torch.float32, device=x.device)
     if state_f is not None:
         head = min(t, w - 1)
         for slot in range(1, w):
             for row in range(min(head, slot)):
                 k = slot - 1 - row
-                dh0[:, :, slot] += dy_eff[:, row, :] * weight_f[k].view(1, d)
+                dh0[:, slot, :] += dy_eff[:, row, :] * weight_f[k].view(1, d)
 
     return (
         _cast_output_to_input_dtype(dx, input_dtype),
@@ -323,7 +323,7 @@ def causal_conv1d_bwd_cpu(x, y, weight, dy, initial_state, dht, query_start_loc,
     dx = torch.zeros((total_tokens, d), dtype=input_dtype, device=x.device)
     dw = torch.zeros((w, d), dtype=torch.float32, device=x.device)
     db = torch.zeros((d,), dtype=torch.float32, device=x.device)
-    dh0 = torch.zeros((bsz, d, w), dtype=input_dtype, device=x.device)
+    dh0 = torch.zeros((bsz, w, d), dtype=input_dtype, device=x.device)
     for b in range(bsz):
         start, end = qsl[b], qsl[b + 1]
         if end <= start:

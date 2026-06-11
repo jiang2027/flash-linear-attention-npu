@@ -85,7 +85,7 @@ inputs:
       dim_numbers:
         values: [3]
       dim_values:
-        values: [[1, 8], [16, 1536], [2, 4]]
+        values: [[1, 8], [2, 4], [16, 1536]]
   - name: dht
     type: tensor
     required: true
@@ -100,7 +100,7 @@ inputs:
       dim_numbers:
         values: [3]
       dim_values:
-        values: [[1, 8], [16, 1536], [2, 4]]
+        values: [[1, 8], [2, 4], [16, 1536]]
   - name: queryStartLoc
     type: attr
     required: true

@@ -161,13 +161,13 @@ int aclnnCausalConv1dBwdTest(int32_t deviceId, aclrtStream& stream) {
   std::vector<int64_t> yShape = {B, T, D};
   std::vector<int64_t> weightShape = {W, D};
   std::vector<int64_t> dyShape = {B, T, D};
-  std::vector<int64_t> initialStateShape = {B, D, W};  // [B, D, W] for conv state
-  std::vector<int64_t> dhtShape = {B, D, W};  // [B, D, W] for final state gradient
+  std::vector<int64_t> initialStateShape = {B, W, D};  // [B, W, D] for conv state
+  std::vector<int64_t> dhtShape = {B, W, D};  // [B, W, D] for final state gradient
   
   std::vector<int64_t> dxShape = {B, T, D};
   std::vector<int64_t> dwShape = {W, D};
   std::vector<int64_t> dbShape = {D};
-  std::vector<int64_t> dh0Shape = {B, D, W};  // [B, D, W] for initial state gradient
+  std::vector<int64_t> dh0Shape = {B, W, D};  // [B, W, D] for initial state gradient
 
   void* xDeviceAddr = nullptr;
   void* yDeviceAddr = nullptr;
@@ -474,7 +474,7 @@ void BuildVarlenReference(const std::vector<float>& x,
         continue;
       }
       for (int64_t d = 0; d < D; ++d) {
-        dx[g * D + d] += dht[(b * D + d) * W + slot];
+        dx[g * D + d] += dht[(b * W + slot) * D + d];
       }
     }
 
@@ -495,7 +495,8 @@ void BuildVarlenReference(const std::vector<float>& x,
       for (int64_t row = 0; row < std::min(head, iw); ++row) {
         int64_t slot = W - iw + row;
         for (int64_t d = 0; d < D; ++d) {
-          dw[wIdx * D + d] += dy[(seqStart + row) * D + d] * initialState[(b * D + d) * W + slot];
+          dw[wIdx * D + d] +=
+              dy[(seqStart + row) * D + d] * initialState[(b * W + slot) * D + d];
         }
       }
     }
@@ -504,7 +505,7 @@ void BuildVarlenReference(const std::vector<float>& x,
       for (int64_t row = 0; row < std::min(seqLen, slot); ++row) {
         int64_t k = slot - 1 - row;
         for (int64_t d = 0; d < D; ++d) {
-          int64_t dh0Off = (b * D + d) * W + slot;
+          int64_t dh0Off = (b * W + slot) * D + d;
           dh0[dh0Off] += dy[(seqStart + row) * D + d] * weight[k * D + d];
         }
       }
@@ -534,12 +535,12 @@ int RunVarlenFp32SingleSeqTest(aclrtStream& stream) {
   std::vector<int64_t> yShape = {T, D};
   std::vector<int64_t> weightShape = {W, D};
   std::vector<int64_t> dyShape = {T, D};
-  std::vector<int64_t> initialStateShape = {B, D, W};
-  std::vector<int64_t> dhtShape = {B, D, W};
+  std::vector<int64_t> initialStateShape = {B, W, D};
+  std::vector<int64_t> dhtShape = {B, W, D};
   std::vector<int64_t> dxShape = {T, D};
   std::vector<int64_t> dwShape = {W, D};
   std::vector<int64_t> dbShape = {D};
-  std::vector<int64_t> dh0Shape = {B, D, W};
+  std::vector<int64_t> dh0Shape = {B, W, D};
 
   std::vector<float> xHost(GetShapeSize(xShape));
   std::vector<float> yHost(GetShapeSize(yShape), 0.0f);
@@ -722,13 +723,13 @@ int RunInputLayoutFp32Test(aclrtStream& stream, const std::string& layout) {
   std::vector<int64_t> yShape = xShape;
   std::vector<int64_t> dyShape = xShape;
   std::vector<int64_t> weightShape = {W, D};
-  std::vector<int64_t> initialStateShape = {logicalB, D, W};
-  std::vector<int64_t> dhtShape = {logicalB, D, W};
+  std::vector<int64_t> initialStateShape = {logicalB, W, D};
+  std::vector<int64_t> dhtShape = {logicalB, W, D};
   std::vector<int64_t> dxShape = isNtD ? std::vector<int64_t>{logicalT, D}
                                        : std::vector<int64_t>{logicalB, logicalT, D};
   std::vector<int64_t> dwShape = {W, D};
   std::vector<int64_t> dbShape = {D};
-  std::vector<int64_t> dh0Shape = {logicalB, D, W};
+  std::vector<int64_t> dh0Shape = {logicalB, W, D};
 
   std::vector<float> xLogical(GetShapeSize(dxShape));
   std::vector<float> yLogical(GetShapeSize(dxShape), 0.0f);
@@ -900,12 +901,12 @@ int RunVarlenBf16Test(aclrtStream& stream) {
   std::vector<int64_t> yShape = {totalTokens, D};
   std::vector<int64_t> weightShape = {W, D};
   std::vector<int64_t> dyShape = {totalTokens, D};
-  std::vector<int64_t> initialStateShape = {B, D, W};
-  std::vector<int64_t> dhtShape = {B, D, W};
+  std::vector<int64_t> initialStateShape = {B, W, D};
+  std::vector<int64_t> dhtShape = {B, W, D};
   std::vector<int64_t> dxShape = {totalTokens, D};
   std::vector<int64_t> dwShape = {W, D};
   std::vector<int64_t> dbShape = {D};
-  std::vector<int64_t> dh0Shape = {B, D, W};
+  std::vector<int64_t> dh0Shape = {B, W, D};
 
   std::vector<float> xHost(GetShapeSize(xShape));
   std::vector<float> yHost(GetShapeSize(yShape), 0.0f);

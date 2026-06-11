@@ -63,8 +63,8 @@ $$
 | y | FLOAT/FLOAT16/BF16 | 与 `x` 相同 | 可选 | 前向预激活输出。`activation=1/2` 时必须提供。 |
 | weight | FLOAT/FLOAT16/BF16 | `[W, D]` | 必选 | 卷积核权重。 |
 | dy | FLOAT/FLOAT16/BF16 | 与 `x` 相同 | 必选 | 前向输出梯度。 |
-| initial_state | FLOAT/FLOAT16/BF16 | `[B, D, W]` | 可选 | 初始卷积状态。 |
-| dht | FLOAT/FLOAT16/BF16 | `[B, D, W]` | 可选 | 最终卷积状态梯度。 |
+| initial_state | FLOAT/FLOAT16/BF16 | `[B, W, D]` | 可选 | 初始卷积状态，与正向算子状态 layout 一致。 |
+| dht | FLOAT/FLOAT16/BF16 | `[B, W, D]` | 可选 | 最终卷积状态梯度。 |
 | queryStartLoc | INT64 | `[B+1]` | 可选 | 变长序列起止位置。`TND`/`NTD` 下必须提供。 |
 
 ### 输出
@@ -74,7 +74,7 @@ $$
 | dx | FLOAT/FLOAT16/BF16 | 固定长度 `[B, T, D]`；变长 `[totalTokens, D]` | 必选 | 输入梯度，始终按逻辑 layout 输出。 |
 | dw | FLOAT | `[W, D]` | 可选 | 权重梯度。 |
 | db | FLOAT | `[D]` | 可选 | 偏置梯度。 |
-| dh0 | FLOAT/FLOAT16/BF16 | `[B, D, W]` | 可选 | 初始状态梯度。 |
+| dh0 | FLOAT/FLOAT16/BF16 | `[B, W, D]` | 可选 | 初始状态梯度。 |
 
 ### 属性
 
@@ -111,7 +111,7 @@ $$
 - `dw`、`db` 的数据类型必须为 `FLOAT`。
 - `weight` 必须为二维 tensor，shape 为 `[W, D]`。
 - `y` 和 `dy` 必须与 `x` 采用相同输入 layout 和相同 shape。
-- `initial_state`、`dht`、`dh0` 的逻辑 shape 为 `[B, D, W]`。
+- `initial_state`、`dht`、`dh0` 的逻辑 shape 为 `[B, W, D]`，与正向算子的状态 layout 一致。
 - `BSND`/`TND` layout 下逻辑特征维 `D` 必须为 16 的倍数；`BNSD`/`NTD` layout 下最后一维 `Dh` 必须为 16 的倍数，逻辑特征维为 `D=N*Dh`。
 - 不支持空序列，固定长度场景下 `T > 0`，变长场景下 `totalTokens > 0`。
 - `activation=1` 或 `activation=2` 时必须提供 `y`。
