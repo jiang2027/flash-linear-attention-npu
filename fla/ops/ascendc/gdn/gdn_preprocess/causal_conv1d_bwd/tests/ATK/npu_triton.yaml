@@ -1,0 +1,11 @@
+nodes:
+  - backend: pyaclnn
+    task: ['accuracy']
+    devices: [0]
+  - backend: cpu
+    task: ['accuracy']
+    is_compare: false
+  - backend: triton
+    task: ['accuracy']
+    devices: [0]
+    is_compare: true

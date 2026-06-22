@@ -1,11 +1,12 @@
 api: pytorch
 api_type: executor_causal_conv1d_bwd
 aclnn_api_type: aclnn_causal_conv1d_bwd
+triton_api_type: triton_causal_conv1d_bwd
 version: v2.1
 name: aclnn.causal_conv1d_bwd
 aclnn_name: CausalConv1dBwd
 generate: generator_causal_conv1d_bwd
-dtype_numbers: 50
+dtype_numbers: 500
 extra_numbers: 0
 standard:
   acc: causal_conv1d_bwd_allclose

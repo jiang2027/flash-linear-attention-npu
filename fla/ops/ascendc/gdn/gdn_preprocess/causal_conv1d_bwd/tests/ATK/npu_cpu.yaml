@@ -1,0 +1,6 @@
+nodes:
+  - backend: pyaclnn
+    task: ['accuracy_dc']
+    devices: [0]
+  - backend: cpu
+    is_compare: false

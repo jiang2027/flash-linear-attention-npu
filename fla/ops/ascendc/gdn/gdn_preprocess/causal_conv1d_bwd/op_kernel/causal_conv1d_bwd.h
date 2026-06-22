@@ -357,10 +357,6 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
     uint32_t totalCount = totalRows * BD_;
     if (!fullTile) {
         Duplicate(dst, float(0), totalCount);
-        if constexpr (!IsSameType<inputT, float>::value) {
-            LocalTensor<inputT> srcTemp = tempBuf_.Get<inputT>();
-            Duplicate(srcTemp, static_cast<inputT>(0), totalCount);
-        }
         PipeBarrier<PIPE_V>();
     }
     if (validRows == 0) {
@@ -394,7 +390,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
             }
             WaitMte2ToV();
         } else {
-            LocalTensor<inputT> srcTemp = tempBuf_.Get<inputT>();
+            LocalTensor<inputT> dstT = dst.template ReinterpretCast<inputT>();
             for (uint32_t row = 0; row < validRows; row++) {
                 uint32_t channel = i_d * BD_;
                 uint32_t remain = BD_;
@@ -408,14 +404,14 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
                         0,
                         0};
                     uint64_t base = GetInputOffset(bos, startRow + row, channel);
-                    DataCopyPad(srcTemp[localOffset], srcGm[base], copyParams, padParams);
+                    DataCopyPad(dstT[totalCount + localOffset], srcGm[base], copyParams, padParams);
                     channel += segLen;
                     localOffset += segLen;
                     remain -= segLen;
                 }
             }
             WaitMte2ToV();
-            Cast(dst, srcTemp, RoundMode::CAST_NONE, totalCount);
+            Cast(dst, dstT[totalCount], RoundMode::CAST_NONE, totalCount);
             PipeBarrier<PIPE_V>();
         }
         return;
@@ -443,7 +439,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
         }
         WaitMte2ToV();
     } else {
-        LocalTensor<inputT> srcTemp = tempBuf_.Get<inputT>();
+        LocalTensor<inputT> dstT = dst.template ReinterpretCast<inputT>();
         while (remain > 0) {
             uint32_t segLen = useGradLayout ? GetInputSegmentLen(channel, remain) : remain;
             uint32_t rowStride = useGradLayout ? GetInputRowStride(channel) : D_;
@@ -455,13 +451,13 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
                 0};
             uint64_t base = useGradLayout ? GetInputOffset(bos, startRow, channel)
                                           : (bos + startRow) * D_ + channel;
-            DataCopyPad(srcTemp[localOffset], srcGm[base], copyParams, padParams);
+            DataCopyPad(dstT[totalCount + localOffset], srcGm[base], copyParams, padParams);
             channel += segLen;
             localOffset += segLen;
             remain -= segLen;
         }
         WaitMte2ToV();
-        Cast(dst, srcTemp, RoundMode::CAST_NONE, totalCount);
+        Cast(dst, dstT[totalCount], RoundMode::CAST_NONE, totalCount);
         PipeBarrier<PIPE_V>();
     }
 }
@@ -487,10 +483,10 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInWeight(uint32_
         DataCopyPad(wLocal, weightGm_[off], copyParams, padParams);
         WaitMte2ToV();
     } else {
-        LocalTensor<inputT> wTemp = tempBuf_.Get<inputT>();
-        DataCopyPad(wTemp, weightGm_[off], copyParams, padParams);
+        LocalTensor<inputT> wLocalT = wLocal.template ReinterpretCast<inputT>();
+        DataCopyPad(wLocalT[wBdCount_], weightGm_[off], copyParams, padParams);
         WaitMte2ToV();
-        Cast(wLocal, wTemp, RoundMode::CAST_NONE, wBdCount_);
+        Cast(wLocal, wLocalT[wBdCount_], RoundMode::CAST_NONE, wBdCount_);
         PipeBarrier<PIPE_V>();
     }
 }
