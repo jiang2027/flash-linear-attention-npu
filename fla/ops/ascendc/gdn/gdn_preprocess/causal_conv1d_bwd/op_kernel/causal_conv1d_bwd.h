@@ -73,6 +73,13 @@ private:
     __aicore__ inline uint64_t GetInputOffset(uint64_t bos, uint32_t row, uint32_t channel) const;
     __aicore__ inline uint32_t GetInputRowStride(uint32_t channel) const;
     __aicore__ inline uint32_t GetInputSegmentLen(uint32_t channel, uint32_t remain) const;
+    __aicore__ inline void AllocEventIds();
+    __aicore__ inline void ReleaseEventIds();
+    __aicore__ inline void WaitVToMte2();
+    __aicore__ inline void WaitMte2ToV();
+    __aicore__ inline void WaitVToMte3();
+    __aicore__ inline void WaitMte3ToV();
+    __aicore__ inline void WaitMte3ToMte2();
     __aicore__ inline void CopyInInputTile(GlobalTensor<inputT> &srcGm, LocalTensor<float> dst,
                                            uint64_t bos, uint32_t startRow, uint32_t i_d,
                                            uint32_t totalRows, uint32_t seqLen, bool useGradLayout);
@@ -118,6 +125,12 @@ private:
     TBuf<TPosition::VECCALC> dbRowsBuf_;
     TBuf<TPosition::VECCALC> sigmoidBuf_;
     TBuf<TPosition::VECCALC> dh0Buf_;
+
+    TEventID vToMte2Event_;
+    TEventID mte2ToVEvent_;
+    TEventID vToMte3Event_;
+    TEventID mte3ToVEvent_;
+    TEventID mte3ToMte2Event_;
 
     uint32_t B_ = 0, T_ = 0, D_ = 0, W_ = 0;
     uint32_t activation_ = ACTIVATION_NONE;
@@ -236,6 +249,62 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::InitBuffer(TPipe *in
     }
     if (useInitialState_ || useFinalState_)
         pipe_->InitBuffer(dh0Buf_, BD_ * FP32_DTYPE_SIZE);
+    AllocEventIds();
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::AllocEventIds()
+{
+    vToMte2Event_ = GetTPipePtr()->AllocEventID<HardEvent::V_MTE2>();
+    mte2ToVEvent_ = GetTPipePtr()->AllocEventID<HardEvent::MTE2_V>();
+    vToMte3Event_ = GetTPipePtr()->AllocEventID<HardEvent::V_MTE3>();
+    mte3ToVEvent_ = GetTPipePtr()->AllocEventID<HardEvent::MTE3_V>();
+    mte3ToMte2Event_ = GetTPipePtr()->AllocEventID<HardEvent::MTE3_MTE2>();
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ReleaseEventIds()
+{
+    GetTPipePtr()->ReleaseEventID<HardEvent::V_MTE2>(vToMte2Event_);
+    GetTPipePtr()->ReleaseEventID<HardEvent::MTE2_V>(mte2ToVEvent_);
+    GetTPipePtr()->ReleaseEventID<HardEvent::V_MTE3>(vToMte3Event_);
+    GetTPipePtr()->ReleaseEventID<HardEvent::MTE3_V>(mte3ToVEvent_);
+    GetTPipePtr()->ReleaseEventID<HardEvent::MTE3_MTE2>(mte3ToMte2Event_);
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::WaitVToMte2()
+{
+    SetFlag<HardEvent::V_MTE2>(vToMte2Event_);
+    WaitFlag<HardEvent::V_MTE2>(vToMte2Event_);
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::WaitMte2ToV()
+{
+    SetFlag<HardEvent::MTE2_V>(mte2ToVEvent_);
+    WaitFlag<HardEvent::MTE2_V>(mte2ToVEvent_);
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::WaitVToMte3()
+{
+    SetFlag<HardEvent::V_MTE3>(vToMte3Event_);
+    WaitFlag<HardEvent::V_MTE3>(vToMte3Event_);
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::WaitMte3ToV()
+{
+    SetFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+    WaitFlag<HardEvent::MTE3_V>(mte3ToVEvent_);
+}
+
+template <typename inputT, typename calT>
+__aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::WaitMte3ToMte2()
+{
+    SetFlag<HardEvent::MTE3_MTE2>(mte3ToMte2Event_);
+    WaitFlag<HardEvent::MTE3_MTE2>(mte3ToMte2Event_);
 }
 
 template <typename inputT, typename calT>
@@ -298,9 +367,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
         return;
     }
 
-    event_t vMte2Ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-    SetFlag<HardEvent::V_MTE2>(vMte2Ev);
-    WaitFlag<HardEvent::V_MTE2>(vMte2Ev);
+    WaitVToMte2();
 
     DataCopyPadExtParams<inputT> padParams{false, 0, 0, static_cast<inputT>(0)};
     if (useGradLayout &&
@@ -325,9 +392,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
                     remain -= segLen;
                 }
             }
-            event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-            SetFlag<HardEvent::MTE2_V>(ev);
-            WaitFlag<HardEvent::MTE2_V>(ev);
+            WaitMte2ToV();
         } else {
             LocalTensor<inputT> srcTemp = tempBuf_.Get<inputT>();
             for (uint32_t row = 0; row < validRows; row++) {
@@ -349,9 +414,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
                     remain -= segLen;
                 }
             }
-            event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-            SetFlag<HardEvent::MTE2_V>(ev);
-            WaitFlag<HardEvent::MTE2_V>(ev);
+            WaitMte2ToV();
             Cast(dst, srcTemp, RoundMode::CAST_NONE, totalCount);
             PipeBarrier<PIPE_V>();
         }
@@ -378,9 +441,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
             localOffset += segLen;
             remain -= segLen;
         }
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
     } else {
         LocalTensor<inputT> srcTemp = tempBuf_.Get<inputT>();
         while (remain > 0) {
@@ -399,9 +460,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInputTile(
             localOffset += segLen;
             remain -= segLen;
         }
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
         Cast(dst, srcTemp, RoundMode::CAST_NONE, totalCount);
         PipeBarrier<PIPE_V>();
     }
@@ -423,20 +482,14 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInWeight(uint32_
         static_cast<uint32_t>((D_ - BD_) * sizeof(inputT)), 0, 0};
     DataCopyPadExtParams<inputT> padParams{false, 0, 0, static_cast<inputT>(0)};
     uint64_t off = static_cast<uint64_t>(i_d) * BD_;
-    event_t vMte2Ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-    SetFlag<HardEvent::V_MTE2>(vMte2Ev);
-    WaitFlag<HardEvent::V_MTE2>(vMte2Ev);
+    WaitVToMte2();
     if constexpr (IsSameType<inputT, float>::value) {
         DataCopyPad(wLocal, weightGm_[off], copyParams, padParams);
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
     } else {
         LocalTensor<inputT> wTemp = tempBuf_.Get<inputT>();
         DataCopyPad(wTemp, weightGm_[off], copyParams, padParams);
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
         Cast(wLocal, wTemp, RoundMode::CAST_NONE, wBdCount_);
         PipeBarrier<PIPE_V>();
     }
@@ -478,20 +531,14 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInInitialStateBl
     uint64_t off = static_cast<uint64_t>(i_b) * W_ * D_ +
                    static_cast<uint64_t>(i_d) * BD_;
 
-    event_t vMte2Ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-    SetFlag<HardEvent::V_MTE2>(vMte2Ev);
-    WaitFlag<HardEvent::V_MTE2>(vMte2Ev);
+    WaitVToMte2();
     if constexpr (IsSameType<inputT, float>::value) {
         DataCopyPad(stateBlock, initialStateGm_[off], copyParams, padParams);
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
     } else {
         LocalTensor<inputT> stateIn = castBuf_.Get<inputT>();
         DataCopyPad(stateIn, initialStateGm_[off], copyParams, padParams);
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
         Cast(stateBlock, stateIn, RoundMode::CAST_NONE, BD_ * W_);
         PipeBarrier<PIPE_V>();
     }
@@ -512,20 +559,14 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyInDhtBlock(
     uint64_t off = static_cast<uint64_t>(i_b) * W_ * D_ +
                    static_cast<uint64_t>(i_d) * BD_;
 
-    event_t vMte2Ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-    SetFlag<HardEvent::V_MTE2>(vMte2Ev);
-    WaitFlag<HardEvent::V_MTE2>(vMte2Ev);
+    WaitVToMte2();
     if constexpr (IsSameType<inputT, float>::value) {
         DataCopyPad(stateBlock, dhtGm_[off], copyParams, padParams);
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
     } else {
         LocalTensor<inputT> stateIn = castBuf_.Get<inputT>();
         DataCopyPad(stateIn, dhtGm_[off], copyParams, padParams);
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-        SetFlag<HardEvent::MTE2_V>(ev);
-        WaitFlag<HardEvent::MTE2_V>(ev);
+        WaitMte2ToV();
         Cast(stateBlock, stateIn, RoundMode::CAST_NONE, BD_ * W_);
         PipeBarrier<PIPE_V>();
     }
@@ -832,9 +873,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ComputeDh0(
             0,
             stateRowStrideBytes,
             0};
-        event_t vToMte3 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-        SetFlag<HardEvent::V_MTE3>(vToMte3);
-        WaitFlag<HardEvent::V_MTE3>(vToMte3);
+        WaitVToMte3();
         DataCopyPad(dh0Gm_[dh0Base], dh0Src, outParams);
     } else {
         LocalTensor<inputT> dh0Out = castBuf_.Get<inputT>();
@@ -846,24 +885,16 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ComputeDh0(
             0,
             stateRowStrideBytes,
             0};
-        event_t vToMte3 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-        SetFlag<HardEvent::V_MTE3>(vToMte3);
-        WaitFlag<HardEvent::V_MTE3>(vToMte3);
+        WaitVToMte3();
         DataCopyPad(dh0Gm_[dh0Base], dh0Out, outParams);
     }
-    event_t mte3ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-    SetFlag<HardEvent::MTE3_V>(mte3ToV);
-    WaitFlag<HardEvent::MTE3_V>(mte3ToV);
+    WaitMte3ToV();
 }
 
 template <typename inputT, typename calT>
 __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDx(
     uint64_t bos, uint32_t i_t, uint32_t i_d, uint32_t seqLen)
 {
-    event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-    SetFlag<HardEvent::V_MTE3>(ev);
-    WaitFlag<HardEvent::V_MTE3>(ev);
-
     LocalTensor<float> dl = dxBuf_.Get<float>();
     uint64_t off = bos * D_ + i_t * BT_ * D_ + i_d * BD_;
     uint64_t startRow = static_cast<uint64_t>(i_t) * BT_;
@@ -874,10 +905,9 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDx(
     uint32_t rowStrideBytes = static_cast<uint32_t>((D_ - BD_) * sizeof(inputT));
     if constexpr (IsSameType<inputT, float>::value) {
         DataCopyExtParams outParams{static_cast<uint16_t>(validRows), blockBytesDst_, 0, rowStrideBytes, 0};
+        WaitVToMte3();
         DataCopyPad(dxGm_[off], dl, outParams);
-        event_t evMte3V = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-        SetFlag<HardEvent::MTE3_V>(evMte3V);
-        WaitFlag<HardEvent::MTE3_V>(evMte3V);
+        WaitMte3ToV();
     } else {
         LocalTensor<inputT> dlIn = castBuf_.Get<inputT>();
         DataCopyExtParams outParams{
@@ -888,13 +918,9 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDx(
             0};
         Cast(dlIn, dl, RoundMode::CAST_RINT, validRows * BD_);
         PipeBarrier<PIPE_V>();
-        event_t evMte3 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-        SetFlag<HardEvent::V_MTE3>(evMte3);
-        WaitFlag<HardEvent::V_MTE3>(evMte3);
+        WaitVToMte3();
         DataCopyPad(dxGm_[off], dlIn, outParams);
-        event_t evMte3V = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-        SetFlag<HardEvent::MTE3_V>(evMte3V);
-        WaitFlag<HardEvent::MTE3_V>(evMte3V);
+        WaitMte3ToV();
     }
 }
 
@@ -904,9 +930,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDwDb(uint32_t
     if (!hasWeight_ && !hasBias_) return;
 
     if constexpr (IsSameType<inputT, float>::value) {
-        event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-        SetFlag<HardEvent::V_MTE3>(ev);
-        WaitFlag<HardEvent::V_MTE3>(ev);
+        WaitVToMte3();
 
         if (hasWeight_) {
             LocalTensor<float> dwLocal = dwBuf_.Get<float>();
@@ -928,17 +952,14 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDwDb(uint32_t
             DataCopyPad(dbGm_[dbOff], dbLocal, dbParams);
         }
 
-        event_t mte3ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-        SetFlag<HardEvent::MTE3_V>(mte3ToV);
-        WaitFlag<HardEvent::MTE3_V>(mte3ToV);
+        WaitMte3ToV();
+        WaitMte3ToMte2();
     } else {
         LocalTensor<inputT> outputLocal = castBuf_.Get<inputT>();
         if (hasWeight_) {
             Cast(outputLocal, dwBuf_.Get<float>(), RoundMode::CAST_RINT, wBdCount_);
             PipeBarrier<PIPE_V>();
-            event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-            SetFlag<HardEvent::V_MTE3>(ev);
-            WaitFlag<HardEvent::V_MTE3>(ev);
+            WaitVToMte3();
 
             DataCopyExtParams dwOutParams{
                 static_cast<uint16_t>(W_),
@@ -949,26 +970,22 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDwDb(uint32_t
             uint64_t dstOff = static_cast<uint64_t>(i_d) * BD_;
             DataCopyPad(dwGm_[dstOff], outputLocal, dwOutParams);
 
-            event_t mte3ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-            SetFlag<HardEvent::MTE3_V>(mte3ToV);
-            WaitFlag<HardEvent::MTE3_V>(mte3ToV);
+            WaitMte3ToV();
+            WaitMte3ToMte2();
         }
 
         if (hasBias_) {
             Cast(outputLocal, dbBuf_.Get<float>(), RoundMode::CAST_RINT, BD_);
             PipeBarrier<PIPE_V>();
-            event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-            SetFlag<HardEvent::V_MTE3>(ev);
-            WaitFlag<HardEvent::V_MTE3>(ev);
+            WaitVToMte3();
 
             uint64_t dbOff = static_cast<uint64_t>(i_d) * BD_;
             DataCopyExtParams dbParams{
                 1, static_cast<uint32_t>(BD_ * sizeof(inputT)), 0, 0, 0};
             DataCopyPad(dbGm_[dbOff], outputLocal, dbParams);
 
-            event_t mte3ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-            SetFlag<HardEvent::MTE3_V>(mte3ToV);
-            WaitFlag<HardEvent::MTE3_V>(mte3ToV);
+            WaitMte3ToV();
+            WaitMte3ToMte2();
         }
     }
 }
@@ -976,9 +993,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutDwDb(uint32_t
 template <typename inputT, typename calT>
 __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutPartialDwDb(uint32_t coreIdx, uint32_t i_d)
 {
-    event_t ev = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE3));
-    SetFlag<HardEvent::V_MTE3>(ev);
-    WaitFlag<HardEvent::V_MTE3>(ev);
+    WaitVToMte3();
 
     uint64_t partialIdx = (static_cast<uint64_t>(coreIdx) * numBlksD_ + i_d);
     if (hasWeight_) {
@@ -990,9 +1005,8 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::CopyOutPartialDwDb(u
         DataCopy(partialDbGm_[partialIdx * BD_], dbLocal, BD_);
     }
 
-    event_t mte3ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE3_V));
-    SetFlag<HardEvent::MTE3_V>(mte3ToV);
-    WaitFlag<HardEvent::MTE3_V>(mte3ToV);
+    WaitMte3ToV();
+    WaitMte3ToMte2();
 }
 
 template <typename inputT, typename calT>
@@ -1005,13 +1019,9 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ReducePartialDwDb(ui
         PipeBarrier<PIPE_V>();
         for (uint32_t core = 0; core < blockNum_; core++) {
             uint64_t partialIdx = (static_cast<uint64_t>(core) * numBlksD_ + i_d) * wBdCount_;
-            event_t vToMte2 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-            SetFlag<HardEvent::V_MTE2>(vToMte2);
-            WaitFlag<HardEvent::V_MTE2>(vToMte2);
+            WaitVToMte2();
             DataCopy(tmp, partialDwGm_[partialIdx], wBdCount_);
-            event_t mte2ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-            SetFlag<HardEvent::MTE2_V>(mte2ToV);
-            WaitFlag<HardEvent::MTE2_V>(mte2ToV);
+            WaitMte2ToV();
             Add(dwLocal, dwLocal, tmp, wBdCount_);
             PipeBarrier<PIPE_V>();
         }
@@ -1023,13 +1033,9 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ReducePartialDwDb(ui
         PipeBarrier<PIPE_V>();
         for (uint32_t core = 0; core < blockNum_; core++) {
             uint64_t partialIdx = (static_cast<uint64_t>(core) * numBlksD_ + i_d) * BD_;
-            event_t vToMte2 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-            SetFlag<HardEvent::V_MTE2>(vToMte2);
-            WaitFlag<HardEvent::V_MTE2>(vToMte2);
+            WaitVToMte2();
             DataCopy(tmp, partialDbGm_[partialIdx], BD_);
-            event_t mte2ToV = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-            SetFlag<HardEvent::MTE2_V>(mte2ToV);
-            WaitFlag<HardEvent::MTE2_V>(mte2ToV);
+            WaitMte2ToV();
             Add(dbLocal, dbLocal, tmp, BD_);
             PipeBarrier<PIPE_V>();
         }
@@ -1064,9 +1070,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ComputeDwDbForD(uint
         uint64_t bos = static_cast<uint64_t>(i_b) * T_;
 
         if (hasWeight_) {
-            event_t vToMte2 = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::V_MTE2));
-            SetFlag<HardEvent::V_MTE2>(vToMte2);
-            WaitFlag<HardEvent::V_MTE2>(vToMte2);
+            WaitVToMte2();
             CopyInX(bos, i_t, i_d, T_);
         }
 
@@ -1074,9 +1078,7 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::ComputeDwDbForD(uint
             CopyInDy(bos, i_t, i_d, i_w, T_);
             if (activation_ == ACTIVATION_SILU || activation_ == ACTIVATION_SWISH) {
                 CopyInYAndSiluBwd(bos, i_t, i_d, i_w, T_);
-                event_t e = static_cast<event_t>(GetTPipePtr()->FetchEventID(HardEvent::MTE2_V));
-                SetFlag<HardEvent::MTE2_V>(e);
-                WaitFlag<HardEvent::MTE2_V>(e);
+                WaitMte2ToV();
                 ComputeWdyAndAcc(i_w, 0);
             }
             ComputeDwPartial(i_w, 0);
@@ -1130,7 +1132,7 @@ template <typename inputT, typename calT>
 __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::Process()
 {
     uint32_t bIdx = GetBlockIdx();
-    uint32_t blockNum = GetBlockNum();
+    uint32_t blockNum = blockNum_;
 
     uint32_t loopC = (bIdx < tailChunk_) ? (chunkPerCore_ + 1) : chunkPerCore_;
 
@@ -1210,6 +1212,8 @@ __aicore__ inline void CausalConv1dBwdKernel<inputT, calT>::Process()
     for (uint32_t i_d = bIdx; i_d < numBlksD_; i_d += blockNum) {
         ReducePartialDwDb(i_d);
     }
+
+    ReleaseEventIds();
 }
 
 #endif  // ASCENDC_CAUSAL_CONV1D_BWD_H_
